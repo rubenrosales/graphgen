@@ -3,6 +3,11 @@ from typing import Dict, List
 
 from graphgen.bases.datatypes import Token
 
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    np = None
+
 
 def preprocess_tokens(tokens: List[Token]) -> List[Token]:
     """Preprocess tokens for calculating confidence."""
@@ -26,27 +31,46 @@ def min_prob(tokens: List[Token]) -> float:
 def average_prob(tokens: List[Token]) -> float:
     """Calculate the average probability of a list of tokens."""
     tokens = preprocess_tokens(tokens)
-    return sum(x.prob for x in tokens) / len(tokens)
+    if np is None:
+        return sum(x.prob for x in tokens) / len(tokens)
+    probs = np.fromiter((x.prob for x in tokens), dtype=float)
+    return float(probs.mean())
 
 
 def average_confidence(tokens: List[Token]) -> float:
     """Calculate the average confidence of a list of tokens."""
     tokens = preprocess_tokens(tokens)
-    confidence = [x.prob / sum(y.prob for y in x.top_candidates[:5]) for x in tokens]
-    return sum(confidence) / len(tokens)
+    if np is None:
+        confidence = [x.prob / max(sum(y.prob for y in x.top_candidates[:5]), 1e-12) for x in tokens]
+        return sum(confidence) / len(confidence)
+    confidence = np.fromiter(
+        (
+            x.prob / max(sum(y.prob for y in x.top_candidates[:5]), 1e-12)
+            for x in tokens
+        ),
+        dtype=float,
+    )
+    return float(confidence.mean())
 
 
 def yes_no_loss(tokens_list: List[List[Token]], ground_truth: List[str]) -> float:
     """Calculate the loss for yes/no question."""
-    losses = []
+    if np is None:
+        losses = []
+        for i, tokens in enumerate(tokens_list):
+            token = tokens[0]
+            assert token.text.lower() in ["yes", "no"]
+            losses.append(1 - token.prob if token.text == ground_truth[i] else token.prob)
+        return sum(losses) / len(losses)
+    losses = np.empty(len(tokens_list), dtype=float)
     for i, tokens in enumerate(tokens_list):
         token = tokens[0]
         assert token.text.lower() in ["yes", "no"]
         if token.text == ground_truth[i]:
-            losses.append(1 - token.prob)
+            losses[i] = 1 - token.prob
         else:
-            losses.append(token.prob)
-    return sum(losses) / len(losses)
+            losses[i] = token.prob
+    return float(losses.mean())
 
 
 def _normalize_yes_no(tokens: List[Token]) -> Dict[str, float]:
@@ -149,11 +173,19 @@ def yes_no_loss_entropy(
     tokens_list: List[List[Token]], ground_truth: List[str]
 ) -> float:
     """Calculate the loss for yes/no question using entropy."""
-    losses = []
-    for toks, gt in zip(tokens_list, ground_truth):
+    if np is None:
+        losses = []
+        for toks, gt in zip(tokens_list, ground_truth):
+            dist = _normalize_yes_no(toks)
+            gt = gt.lower()
+            assert gt in {"yes", "no"}
+            losses.append(-math.log(max(dist[gt], 1e-12)))
+        return sum(losses) / len(losses)
+    losses = np.empty(len(tokens_list), dtype=float)
+    for idx, (toks, gt) in enumerate(zip(tokens_list, ground_truth)):
         dist = _normalize_yes_no(toks)
         gt = gt.lower()
         assert gt in {"yes", "no"}
         prob_correct = dist[gt]
-        losses.append(-math.log(prob_correct))
-    return sum(losses) / len(losses)
+        losses[idx] = -math.log(max(prob_correct, 1e-12))
+    return float(losses.mean())

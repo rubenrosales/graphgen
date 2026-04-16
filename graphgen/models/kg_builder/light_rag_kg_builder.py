@@ -101,13 +101,15 @@ class LightRAGKGBuilder(BaseKGBuilder):
         self,
         node_data: tuple[str, List[dict]],
         kg_instance: BaseGraphStorage,
+        existing_node: dict | None = None,
+        persist: bool = True,
     ) -> dict:
         entity_name, node_data = node_data
         entity_types = []
         source_ids = []
         descriptions = []
 
-        node = kg_instance.get_node(entity_name)
+        node = existing_node if existing_node is not None else kg_instance.get_node(entity_name)
         if node is not None:
             entity_types.append(node["entity_type"])
             source_ids.extend(
@@ -148,20 +150,24 @@ class LightRAGKGBuilder(BaseKGBuilder):
                     metadata, ensure_ascii=False, default=str
                 )
 
-        kg_instance.upsert_node(entity_name, node_data=node_data_dict)
+        if persist:
+            kg_instance.upsert_node(entity_name, node_data=node_data_dict)
         return node_data_dict
 
     async def merge_edges(
         self,
         edges_data: tuple[Tuple[str, str], List[dict]],
         kg_instance: BaseGraphStorage,
+        existing_edge: dict | None = None,
+        existing_nodes: set[str] | None = None,
+        persist: bool = True,
     ) -> dict:
         (src_id, tgt_id), edge_data = edges_data
 
         source_ids = []
         descriptions = []
 
-        edge = kg_instance.get_edge(src_id, tgt_id)
+        edge = existing_edge if existing_edge is not None else kg_instance.get_edge(src_id, tgt_id)
         if edge is not None:
             source_ids.extend(
                 split_string_by_multi_markers(edge["source_id"], ["<SEP>"])
@@ -175,7 +181,9 @@ class LightRAGKGBuilder(BaseKGBuilder):
             set([dp["source_id"] for dp in edge_data] + source_ids)
         )
 
-        if not kg_instance.has_node(src_id) or not kg_instance.has_node(tgt_id):
+        has_src = src_id in existing_nodes if existing_nodes is not None else kg_instance.has_node(src_id)
+        has_tgt = tgt_id in existing_nodes if existing_nodes is not None else kg_instance.has_node(tgt_id)
+        if not has_src or not has_tgt:
             logger.warning("Edge (%s, %s) has missing nodes.", src_id, tgt_id)
             return {}
 
@@ -191,11 +199,12 @@ class LightRAGKGBuilder(BaseKGBuilder):
             "length": self.tokenizer.count_tokens(description),
         }
 
-        kg_instance.upsert_edge(
-            src_id,
-            tgt_id,
-            edge_data=edge_data,
-        )
+        if persist:
+            kg_instance.upsert_edge(
+                src_id,
+                tgt_id,
+                edge_data=edge_data,
+            )
         return edge_data
 
     async def _handle_kg_summary(

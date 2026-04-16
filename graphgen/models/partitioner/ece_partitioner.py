@@ -1,6 +1,6 @@
 import math
 import random
-from collections import deque
+from collections import defaultdict, deque
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from tqdm import tqdm
@@ -60,17 +60,27 @@ class ECEPartitioner(BFSPartitioner):
         min_units_per_community: int = 1,
         max_tokens_per_community: int = 10240,
         unit_sampling: str = "random",
+        max_neighbors_per_node: int = 20,
         **kwargs: Any,
     ) -> Iterable[Community]:
         nodes: List[Tuple[str, dict]] = g.get_all_nodes()
         edges: List[Tuple[str, str, dict]] = g.get_all_edges()
 
         node_dict = dict(nodes)
-        edge_dict = {frozenset((u, v)): d for u, v, d in edges}
 
         all_units: List[Tuple[str, Any, dict]] = [
             (NODE_UNIT, nid, d) for nid, d in nodes
         ] + [(EDGE_UNIT, frozenset((u, v)), d) for u, v, d in edges]
+
+        adjacency: Dict[str, List[Tuple[str, Any, dict]]] = defaultdict(list)
+        for u, v, d in edges:
+            e_key = frozenset((u, v))
+            adjacency[u].append((EDGE_UNIT, e_key, d))
+            adjacency[v].append((EDGE_UNIT, e_key, d))
+        if max_neighbors_per_node and max_neighbors_per_node > 0:
+            for node_id, candidates in adjacency.items():
+                ranked = self._sort_units(candidates, unit_sampling)
+                adjacency[node_id] = ranked[:max_neighbors_per_node]
 
         used_n: Set[str] = set()
         used_e: Set[frozenset[str]] = set()
@@ -117,10 +127,10 @@ class ECEPartitioner(BFSPartitioner):
 
                 neighbors: List[Tuple[str, Any, dict]] = []
                 if cur_type == NODE_UNIT:
-                    for nb_id in g.get_neighbors(cur_id):
-                        e_key = frozenset((cur_id, nb_id))
+                    for edge_unit in adjacency.get(cur_id, []):
+                        e_key = edge_unit[1]
                         if e_key not in used_e and e_key not in community_edges:
-                            neighbors.append((EDGE_UNIT, e_key, edge_dict[e_key]))
+                            neighbors.append(edge_unit)
                 else:
                     for n_id in cur_id:
                         if n_id not in used_n and n_id not in community_nodes:

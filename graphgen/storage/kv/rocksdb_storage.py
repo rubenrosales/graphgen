@@ -67,15 +67,21 @@ class RocksDBKVStorage(BaseKVStorage):
                 left_data[k] = v
 
         if left_data:
-            for k, v in left_data.items():
-                self._db[k] = v
-            # if left_data is very large, it is recommended to use self._db.write_batch() for optimization
+            try:
+                # Use RocksDB-backed bulk update path when available.
+                self._db.update(left_data)
+            except Exception:
+                for k, v in left_data.items():
+                    self._db[k] = v
 
         return left_data
 
     def update(self, data: Dict[str, Any]):
-        for k, v in data.items():
-            self._db[k] = v
+        try:
+            self._db.update(data)
+        except Exception:
+            for k, v in data.items():
+                self._db[k] = v
 
     def delete(self, ids: List[str]):
         for _id in ids:

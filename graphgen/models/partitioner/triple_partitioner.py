@@ -20,7 +20,13 @@ class TriplePartitioner(BasePartitioner):
         g: BaseGraphStorage,
         **kwargs: Any,
     ) -> Iterable[Community]:
-        nodes = [n[0] for n in g.get_all_nodes()]
+        all_nodes = g.get_all_nodes()
+        all_edges = g.get_all_edges()
+        nodes = [n[0] for n in all_nodes]
+        adjacency = {}
+        for u, v, _ in all_edges:
+            adjacency.setdefault(u, []).append(v)
+            adjacency.setdefault(v, []).append(u)
         random.shuffle(nodes)
 
         visited_nodes: Set[str] = set()
@@ -37,7 +43,7 @@ class TriplePartitioner(BasePartitioner):
             while queue:
                 u = queue.popleft()
 
-                for v in g.get_neighbors(u):
+                for v in adjacency.get(u, []):
                     edge_key = frozenset((u, v))
 
                     # if this edge has not been used, a new triple has been found

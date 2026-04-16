@@ -66,6 +66,18 @@ class KuzuStorage(BaseGraphStorage):
         except RuntimeError as e:
             print("Rel Table 'Relation' already exists or error:", e)
 
+    def _execute_transaction(self, stmts: List[tuple[str, Dict[str, Any]]]):
+        if not stmts:
+            return
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            for query, params in stmts:
+                self._conn.execute(query, params)
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
     def index_done_callback(self):
         """KuzuDB is ACID, changes are immediate, but we can verify generic persistence here."""
 
@@ -215,6 +227,52 @@ class KuzuStorage(BaseGraphStorage):
         data_str = result.get_next()[0]
         return self._safe_json_loads(data_str)
 
+    def get_nodes_by_ids(self, node_ids: List[str]) -> Dict[str, dict]:
+        if not node_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(node_ids))
+        result = self._conn.execute(
+            "MATCH (a:Entity) WHERE a.id IN $ids RETURN a.id, a.data",
+            {"ids": unique_ids},
+        )
+        nodes: Dict[str, dict] = {}
+        while result.has_next():
+            row = result.get_next()
+            if row is None or len(row) < 2:
+                continue
+            nodes[row[0]] = self._safe_json_loads(row[1])
+        return nodes
+
+    def get_edges_by_pairs(
+        self, edge_pairs: List[tuple[str, str]]
+    ) -> Dict[tuple[str, str], dict]:
+        if not edge_pairs:
+            return {}
+        unique_pairs = list(dict.fromkeys(edge_pairs))
+        src_ids = list({u for u, _ in unique_pairs})
+        dst_ids = list({v for _, v in unique_pairs})
+        pair_set = set(unique_pairs)
+        reverse_pair_set = {(v, u) for u, v in unique_pairs}
+        result = self._conn.execute(
+            """
+            MATCH (a:Entity)-[e:Relation]->(b:Entity)
+            WHERE a.id IN $src_ids AND b.id IN $dst_ids
+            RETURN a.id, b.id, e.data
+            """,
+            {"src_ids": src_ids, "dst_ids": dst_ids},
+        )
+        data: Dict[tuple[str, str], dict] = {}
+        while result.has_next():
+            row = result.get_next()
+            if row is None or len(row) < 3:
+                continue
+            src, dst, payload = row[0], row[1], row[2]
+            if (src, dst) in pair_set:
+                data[(src, dst)] = self._safe_json_loads(payload)
+            elif (src, dst) in reverse_pair_set:
+                data[(dst, src)] = self._safe_json_loads(payload)
+        return data
+
     def update_node(self, node_id: str, node_data: dict[str, any]):
         current_data = self.get_node(node_id)
         if current_data is None:
@@ -335,6 +393,22 @@ class KuzuStorage(BaseGraphStorage):
         """
         self._conn.execute(query, {"id": node_id, "data": json_data})
 
+    def upsert_nodes_bulk(self, nodes: Dict[str, dict]):
+        query = """
+            MERGE (a:Entity {id: $id})
+            ON MATCH SET a.data = $data
+            ON CREATE SET a.data = $data
+        """
+        stmts: List[tuple[str, Dict[str, Any]]] = []
+        for node_id, node_data in nodes.items():
+            try:
+                json_data = json.dumps(node_data, ensure_ascii=False)
+            except (TypeError, ValueError) as e:
+                print(f"Error serializing JSON for node {node_id}: {e}")
+                continue
+            stmts.append((query, {"id": node_id, "data": json_data}))
+        self._execute_transaction(stmts)
+
     def upsert_edge(
         self, source_node_id: str, target_node_id: str, edge_data: dict[str, any]
     ):
@@ -343,13 +417,6 @@ class KuzuStorage(BaseGraphStorage):
         Note: We explicitly ensure nodes exist before merging the edge to avoid errors,
         although GraphGen generally creates nodes before edges.
         """
-        # Ensure source node exists and target node exists
-        if not self.has_node(source_node_id) or not self.has_node(target_node_id):
-            print(
-                f"Cannot upsert edge {source_node_id}->{target_node_id} as one or both nodes do not exist."
-            )
-            return
-
         try:
             json_data = json.dumps(edge_data, ensure_ascii=False)
         except (TypeError, ValueError) as e:
@@ -367,6 +434,23 @@ class KuzuStorage(BaseGraphStorage):
             query, {"src": source_node_id, "dst": target_node_id, "data": json_data}
         )
 
+    def upsert_edges_bulk(self, edges: List[tuple[str, str, dict]]):
+        query = """
+            MATCH (a:Entity {id: $src}), (b:Entity {id: $dst})
+            MERGE (a)-[e:Relation]->(b)
+            ON MATCH SET e.data = $data
+            ON CREATE SET e.data = $data
+        """
+        stmts: List[tuple[str, Dict[str, Any]]] = []
+        for src_id, tgt_id, edge_data in edges:
+            try:
+                json_data = json.dumps(edge_data, ensure_ascii=False)
+            except (TypeError, ValueError) as e:
+                print(f"Error serializing JSON for edge {src_id}->{tgt_id}: {e}")
+                continue
+            stmts.append((query, {"src": src_id, "dst": tgt_id, "data": json_data}))
+        self._execute_transaction(stmts)
+
     def delete_node(self, node_id: str):
         # DETACH DELETE removes the node and all connected edges
         query = "MATCH (a:Entity {id: $id}) DETACH DELETE a"
@@ -380,6 +464,25 @@ class KuzuStorage(BaseGraphStorage):
         """
         result = self._conn.execute(query, {"id": node_id})
         return [row[0] for row in result if row]
+
+    def get_neighbors_batch(self, node_ids: List[str]) -> Dict[str, List[str]]:
+        if not node_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(node_ids))
+        result = self._conn.execute(
+            """
+            MATCH (a:Entity)-[:Relation]-(b:Entity)
+            WHERE a.id IN $ids
+            RETURN a.id, b.id
+            """,
+            {"ids": unique_ids},
+        )
+        neighbors: Dict[str, List[str]] = {node_id: [] for node_id in unique_ids}
+        while result.has_next():
+            row = result.get_next()
+            if row and len(row) >= 2:
+                neighbors[row[0]].append(row[1])
+        return neighbors
 
     def clear(self):
         """Clear all data but keep schema (or drop tables)."""

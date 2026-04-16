@@ -39,8 +39,12 @@ class BaseOperator(ABC):
         self.op_name = op_name or self.__class__.__name__
         self.working_dir = working_dir
         self.kv_backend = kv_backend
+        use_local_storage = os.getenv("GRAPHGEN_EXECUTION_MODE", "").lower() == "local"
         self.kv_storage = init_storage(
-            backend=kv_backend, working_dir=working_dir, namespace=self.op_name
+            backend=kv_backend,
+            working_dir=working_dir,
+            namespace=self.op_name,
+            use_local=use_local_storage,
         )
 
         try:
@@ -78,6 +82,8 @@ class BaseOperator(ABC):
         logger_token = CURRENT_LOGGER_VAR.set(self.logger)
         try:
             self.kv_storage.reload()
+            self._meta_forward_cache = self.get_meta_forward()
+            self._meta_inverse_cache = self.get_meta_inverse()
             to_process, recovered = self.split(batch)
             # yield recovered chunks first
             if not recovered.empty:
@@ -101,15 +107,23 @@ class BaseOperator(ABC):
                 yield pd.DataFrame(result)
                 self.store(result, meta_update)
         finally:
+            self._meta_forward_cache = None
+            self._meta_inverse_cache = None
             CURRENT_LOGGER_VAR.reset(logger_token)
 
     def get_logger(self):
         return self.logger
 
     def get_meta_forward(self):
+        cached = getattr(self, "_meta_forward_cache", None)
+        if cached is not None:
+            return cached
         return self.kv_storage.get_by_id("_meta_forward") or {}
 
     def get_meta_inverse(self):
+        cached = getattr(self, "_meta_inverse_cache", None)
+        if cached is not None:
+            return cached
         return self.kv_storage.get_by_id("_meta_inverse") or {}
 
     def get_trace_id(self, content: dict) -> str:
@@ -154,6 +168,7 @@ class BaseOperator(ABC):
         # update forward meta
         forward_meta = self.get_meta_forward()
         forward_meta.update(meta_update)
+        self._meta_forward_cache = forward_meta
         self.kv_storage.update({"_meta_forward": forward_meta})
 
         # update inverse meta
@@ -161,6 +176,7 @@ class BaseOperator(ABC):
         for k, v_list in meta_update.items():
             for v in v_list:
                 inverse_meta[v] = k
+        self._meta_inverse_cache = inverse_meta
         self.kv_storage.update({"_meta_inverse": inverse_meta})
         if flush:
             self.kv_storage.index_done_callback()

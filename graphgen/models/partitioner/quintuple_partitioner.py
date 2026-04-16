@@ -20,7 +20,13 @@ class QuintuplePartitioner(BasePartitioner):
         g: BaseGraphStorage,
         **kwargs: Any,
     ) -> Iterable[Community]:
-        nodes = [n[0] for n in g.get_all_nodes()]
+        all_nodes = g.get_all_nodes()
+        all_edges = g.get_all_edges()
+        nodes = [n[0] for n in all_nodes]
+        adjacency = {}
+        for u, v, _ in all_edges:
+            adjacency.setdefault(u, []).append(v)
+            adjacency.setdefault(v, []).append(u)
         random.shuffle(nodes)
 
         visited_nodes: Set[str] = set()
@@ -39,7 +45,7 @@ class QuintuplePartitioner(BasePartitioner):
 
                 # collect all neighbors connected to node u via unused edges
                 available_neighbors = []
-                for v in g.get_neighbors(u):
+                for v in adjacency.get(u, []):
                     edge_key = frozenset((u, v))
                     if edge_key not in used_edges:
                         available_neighbors.append(v)

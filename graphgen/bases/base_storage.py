@@ -136,6 +136,40 @@ class BaseGraphStorage(StorageNameSpace, ABC):
     def get_neighbors(self, node_id: str) -> List[str]:
         raise NotImplementedError
 
+    def get_neighbors_batch(self, node_ids: List[str]) -> Dict[str, List[str]]:
+        """Optional batch API with a safe default implementation."""
+        return {node_id: self.get_neighbors(node_id) for node_id in node_ids}
+
+    def get_nodes_by_ids(self, node_ids: List[str]) -> Dict[str, dict]:
+        """Optional bulk node fetch API with a safe default implementation."""
+        data: Dict[str, dict] = {}
+        for node_id in node_ids:
+            node = self.get_node(node_id)
+            if node is not None:
+                data[node_id] = node
+        return data
+
+    def get_edges_by_pairs(
+        self, edge_pairs: List[tuple[str, str]]
+    ) -> Dict[tuple[str, str], dict]:
+        """Optional bulk edge fetch API with a safe default implementation."""
+        data: Dict[tuple[str, str], dict] = {}
+        for u, v in edge_pairs:
+            edge_data = self.get_edge(u, v) or self.get_edge(v, u)
+            if edge_data is not None:
+                data[(u, v)] = edge_data
+        return data
+
+    def upsert_nodes_bulk(self, nodes: Dict[str, dict]):
+        """Optional bulk node upsert API with a safe default implementation."""
+        for node_id, node_data in nodes.items():
+            self.upsert_node(node_id, node_data)
+
+    def upsert_edges_bulk(self, edges: List[tuple[str, str, dict]]):
+        """Optional bulk edge upsert API with a safe default implementation."""
+        for src_id, tgt_id, edge_data in edges:
+            self.upsert_edge(src_id, tgt_id, edge_data)
+
     @abstractmethod
     def reload(self):
         raise NotImplementedError

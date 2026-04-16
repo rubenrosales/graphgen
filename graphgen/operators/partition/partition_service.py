@@ -67,15 +67,36 @@ class PartitionService(BaseOperator):
             self.partitioner = QuintuplePartitioner()
         else:
             raise ValueError(f"Unsupported partition method: {method}")
+        self._cached_communities = None
+        self._cache_signature = None
+
+    @staticmethod
+    def _freeze(value):
+        if isinstance(value, dict):
+            return tuple((k, PartitionService._freeze(v)) for k, v in sorted(value.items()))
+        if isinstance(value, list):
+            return tuple(PartitionService._freeze(v) for v in value)
+        if isinstance(value, set):
+            return tuple(sorted(PartitionService._freeze(v) for v in value))
+        return value
 
     def process(self, batch: list) -> Tuple[Iterable[dict], dict]:
         # this operator does not consume any batch data
         # but for compatibility we keep the interface
         self.kg_instance.reload()
-
-        communities: Iterable = self.partitioner.partition(
-            g=self.kg_instance, **self.method_params
+        signature = (
+            self.kg_instance.get_node_count(),
+            self.kg_instance.get_edge_count(),
+            self._freeze(self.method_params),
+            self.partitioner.__class__.__name__,
         )
+        if self._cache_signature != signature or self._cached_communities is None:
+            self._cached_communities = list(
+                self.partitioner.partition(g=self.kg_instance, **self.method_params)
+            )
+            self._cache_signature = signature
+
+        communities: Iterable = iter(self._cached_communities)
 
         def generator():
             count = 0

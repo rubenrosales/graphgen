@@ -37,6 +37,11 @@ class AnchorBFSPartitioner(BFSPartitioner):
         **kwargs: Any,
     ) -> Iterable[Community]:
         nodes = g.get_all_nodes()  # List[tuple[id, meta]]
+        edges = g.get_all_edges()
+        adjacency = {}
+        for u, v, _ in edges:
+            adjacency.setdefault(u, []).append(v)
+            adjacency.setdefault(v, []).append(u)
 
         anchors: Set[str] = self._pick_anchor_ids(nodes)
         if not anchors:
@@ -52,7 +57,7 @@ class AnchorBFSPartitioner(BFSPartitioner):
             if seed_node in used_n:
                 continue
             comm_n, comm_e = self._grow_community(
-                seed_node, g, max_units_per_community, used_n, used_e
+                seed_node, adjacency, max_units_per_community, used_n, used_e
             )
             if comm_n or comm_e:
                 yield Community(id=seed_node, nodes=comm_n, edges=comm_e)
@@ -74,7 +79,7 @@ class AnchorBFSPartitioner(BFSPartitioner):
     @staticmethod
     def _grow_community(
         seed: str,
-        g: BaseGraphStorage,
+        adjacency: dict[str, list[str]],
         max_units: int,
         used_n: set[str],
         used_e: set[frozenset[str]],
@@ -102,7 +107,7 @@ class AnchorBFSPartitioner(BFSPartitioner):
                 used_n.add(it)
                 comm_n.append(it)
                 cnt += 1
-                for nei in g.get_neighbors(it):
+                for nei in adjacency.get(it, []):
                     e_key = frozenset((it, nei))
                     if e_key not in used_e:
                         queue.append((EDGE_UNIT, e_key))

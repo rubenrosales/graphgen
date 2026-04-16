@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Awaitable, Callable, List, TypeVar
 
 from tqdm.asyncio import tqdm as tqdm_async
@@ -19,11 +20,17 @@ def run_concurrent(
     unit: str = "item",
 ) -> List[R]:
     async def _run_all():
+        max_concurrency = int(
+            os.getenv("GRAPHGEN_MAX_CONCURRENCY", str(min(64, max(1, len(items)))))
+        )
+        sem = asyncio.Semaphore(max_concurrency)
+
         # Wrapper to return the index alongside the result
         # This eliminates the need to map task IDs
         async def _worker(index: int, item: T):
             try:
-                res = await coro_fn(item)
+                async with sem:
+                    res = await coro_fn(item)
                 return index, res, None
             except Exception as e:
                 return index, None, e

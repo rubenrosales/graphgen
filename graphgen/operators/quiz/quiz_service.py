@@ -1,3 +1,4 @@
+import asyncio
 from typing import Tuple
 
 from graphgen.bases import BaseGraphStorage, BaseLLMWrapper, BaseOperator
@@ -34,12 +35,19 @@ class QuizService(BaseOperator):
                 tasks.append((desc, "TEMPLATE", "yes"))
             tasks.append((desc, "ANTI_TEMPLATE", "no"))
         try:
-            quizzes = []
+            prompts_with_gt = []
             for d, template_type, gt in tasks:
                 prompt = self.generator.build_prompt_for_description(d, template_type)
-                new_description = await self.llm_client.generate_answer(
-                    prompt, temperature=1
-                )
+                prompts_with_gt.append((prompt, gt))
+
+            generations = await asyncio.gather(
+                *[
+                    self.llm_client.generate_answer(prompt, temperature=1)
+                    for prompt, _ in prompts_with_gt
+                ]
+            )
+            quizzes = []
+            for new_description, (_, gt) in zip(generations, prompts_with_gt):
                 rephrased_text = self.generator.parse_rephrased_text(new_description)
                 quizzes.append((rephrased_text, gt))
             return {

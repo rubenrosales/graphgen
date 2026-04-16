@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Set, Union
 
 import ray
@@ -292,7 +293,31 @@ class StorageFactory:
     """
 
     @staticmethod
-    def create_storage(backend: str, working_dir: str, namespace: str):
+    def _create_local_storage(backend: str, working_dir: str, namespace: str):
+        if backend == "json_kv":
+            from graphgen.storage import JsonKVStorage
+
+            return JsonKVStorage(working_dir, namespace)
+        if backend == "rocksdb":
+            from graphgen.storage import RocksDBKVStorage
+
+            return RocksDBKVStorage(working_dir, namespace)
+        if backend == "networkx":
+            from graphgen.storage import NetworkXStorage
+
+            return NetworkXStorage(working_dir, namespace)
+        if backend == "kuzu":
+            from graphgen.storage import KuzuStorage
+
+            return KuzuStorage(working_dir, namespace)
+        raise ValueError(f"Unknown storage backend: {backend}")
+
+    @staticmethod
+    def create_storage(
+        backend: str, working_dir: str, namespace: str, use_local: bool = False
+    ):
+        if use_local:
+            return StorageFactory._create_local_storage(backend, working_dir, namespace)
 
         if backend in ["json_kv", "rocksdb"]:
             actor_name = f"Actor_KV_{namespace}"
@@ -319,5 +344,11 @@ class StorageFactory:
         return proxy_class(actor_handle)
 
 
-def init_storage(backend: str, working_dir: str, namespace: str):
-    return StorageFactory.create_storage(backend, working_dir, namespace)
+def init_storage(
+    backend: str, working_dir: str, namespace: str, use_local: bool = False
+):
+    if not use_local:
+        use_local = os.getenv("GRAPHGEN_EXECUTION_MODE", "").lower() == "local"
+    return StorageFactory.create_storage(
+        backend, working_dir, namespace, use_local=use_local
+    )

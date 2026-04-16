@@ -206,6 +206,30 @@ class NetworkXStorage(BaseGraphStorage):
         print(f"Node {node_id} not found in the graph.")
         return []
 
+    def get_neighbors_batch(self, node_ids: List[str]) -> Dict[str, List[str]]:
+        return {
+            node_id: list(self._graph.neighbors(node_id))
+            for node_id in node_ids
+            if self._graph.has_node(node_id)
+        }
+
+    def get_nodes_by_ids(self, node_ids: List[str]) -> Dict[str, dict]:
+        return {
+            node_id: self._graph.nodes[node_id]
+            for node_id in node_ids
+            if self._graph.has_node(node_id)
+        }
+
+    def get_edges_by_pairs(
+        self, edge_pairs: List[tuple[str, str]]
+    ) -> Dict[tuple[str, str], dict]:
+        data: Dict[tuple[str, str], dict] = {}
+        for u, v in edge_pairs:
+            edge = self._graph.edges.get((u, v)) or self._graph.edges.get((v, u))
+            if edge is not None:
+                data[(u, v)] = edge
+        return data
+
     def clear(self):
         """
         Clear the graph by removing all nodes and edges.

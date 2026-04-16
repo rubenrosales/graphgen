@@ -33,21 +33,16 @@ class BasePartitioner(ABC):
         """
         nodes = comm.nodes
         edges = comm.edges
-        nodes_data = []
-        for node in nodes:
-            node_data = g.get_node(node)
-            if node_data:
-                nodes_data.append((node, node_data))
-        edges_data = []
+        nodes_lookup = g.get_nodes_by_ids(nodes) if nodes else {}
+        nodes_data = [(node, nodes_lookup[node]) for node in nodes if node in nodes_lookup]
+        valid_edges = []
         for edge in edges:
-            # Filter out self-loops and invalid edges
             if not isinstance(edge, tuple) or len(edge) != 2:
                 continue
             u, v = edge
             if u == v:
                 continue
-
-            edge_data = g.get_edge(u, v) or g.get_edge(v, u)
-            if edge_data:
-                edges_data.append((u, v, edge_data))
+            valid_edges.append((u, v))
+        edge_lookup = g.get_edges_by_pairs(valid_edges) if valid_edges else {}
+        edges_data = [(u, v, edge_lookup[(u, v)]) for u, v in valid_edges if (u, v) in edge_lookup]
         return nodes_data, edges_data

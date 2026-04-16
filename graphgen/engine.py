@@ -50,6 +50,11 @@ class Engine:
         self.datasets: Dict[str, ray.data.Dataset] = {}
         self.llm_actors = {}
         self.storage_actors = {}
+        self.execution_mode = self._resolve_execution_mode(
+            self.global_params, self.config.nodes
+        )
+        self._use_local_storage = self.execution_mode == "local"
+        os.environ["GRAPHGEN_EXECUTION_MODE"] = self.execution_mode
 
         ctx = DataContext.get_current()
         ctx.enable_rich_progress_bars = False
@@ -71,16 +76,34 @@ class Engine:
 
         if not ray.is_initialized():
             context = ray.init(
-                include_dashboard=True,
+                include_dashboard=not self._use_local_storage,
                 ignore_reinit_error=True,
                 logging_level=logging.ERROR,
                 log_to_driver=True,
+                local_mode=self._use_local_storage,
                 **ray_init_kwargs,
             )
             logger.info("Ray Dashboard URL: %s", context.dashboard_url)
 
         self._init_llms()
         self._init_storage()
+
+    @staticmethod
+    def _resolve_execution_mode(global_params: Dict[str, Any], nodes: List[Node]) -> str:
+        mode = str(global_params.get("execution_mode", "auto")).lower()
+        if mode in {"local", "distributed"}:
+            return mode
+
+        local_doc_threshold = int(global_params.get("local_doc_threshold", 5))
+        doc_count = 0
+        for node in nodes:
+            params = node.params or {}
+            input_path = params.get("input_path")
+            if isinstance(input_path, list):
+                doc_count += len(input_path)
+            elif isinstance(input_path, str) and input_path.strip():
+                doc_count += 1
+        return "local" if 0 < doc_count <= local_doc_threshold else "distributed"
 
     def _init_llms(self):
         self.llm_actors["synthesizer"] = init_llm("synthesizer")
@@ -91,14 +114,29 @@ class Engine:
         working_dir = self.global_params["working_dir"]
 
         for node_id in kv_namespaces:
-            proxy = init_storage(self.global_params["kv_backend"], working_dir, node_id)
+            proxy = init_storage(
+                self.global_params["kv_backend"],
+                working_dir,
+                node_id,
+                use_local=self._use_local_storage,
+            )
             self.storage_actors[f"kv_{node_id}"] = proxy
             logger.info("Create KV Storage Actor: namespace=%s", node_id)
 
         for ns in graph_namespaces:
-            proxy = init_storage(self.global_params["graph_backend"], working_dir, ns)
+            proxy = init_storage(
+                self.global_params["graph_backend"],
+                working_dir,
+                ns,
+                use_local=self._use_local_storage,
+            )
             self.storage_actors[f"graph_{ns}"] = proxy
             logger.info("Create Graph Storage Actor: namespace=%s", ns)
+
+    def _build_compute_strategy(self, replicas: int):
+        if self._use_local_storage:
+            return ray.data.TaskPoolStrategy(size=max(1, replicas))
+        return ray.data.ActorPoolStrategy(min_size=1, max_size=replicas)
 
     def _scan_storage_requirements(self) -> tuple[set[str], set[str]]:
         kv_namespaces = set()
@@ -245,7 +283,7 @@ class Engine:
         if node.type == "aggregate":
             self.datasets[node.id] = input_ds.repartition(1).map_batches(
                 op_handler,
-                compute=ray.data.ActorPoolStrategy(min_size=1, max_size=1),
+                compute=self._build_compute_strategy(1),
                 batch_size=None,  # aggregate processes the whole dataset at once
                 num_gpus=compute_resources.get("num_gpus", 0)
                 if compute_resources
@@ -256,7 +294,7 @@ class Engine:
         else:
             self.datasets[node.id] = input_ds.map_batches(
                 op_handler,
-                compute=ray.data.ActorPoolStrategy(min_size=1, max_size=replicas),
+                compute=self._build_compute_strategy(replicas),
                 batch_size=batch_size,
                 num_gpus=compute_resources.get("num_gpus", 0)
                 if compute_resources
