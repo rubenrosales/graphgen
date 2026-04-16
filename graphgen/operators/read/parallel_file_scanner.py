@@ -1,11 +1,15 @@
 import os
 import time
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
 from graphgen.bases import BaseKVStorage
-from graphgen.utils import compute_content_hash, logger
+from graphgen.utils import compute_content_hash
+
+
+_THREAD_LOGGER = logging.getLogger(__name__)
 
 
 class ParallelFileScanner:
@@ -122,7 +126,7 @@ class ParallelFileScanner:
                 stats["file_count"] += sub_data["stats"].get("file_count", 0)
 
         result = {"path": path_str, "files": files, "dirs": dirs, "stats": stats}
-        logger.debug(
+        _THREAD_LOGGER.debug(
             "Scanned %s: %d files, %d dirs",
             path_str,
             stats["file_count"],
