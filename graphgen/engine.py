@@ -54,6 +54,16 @@ class Engine:
             self.global_params, self.config.nodes
         )
         self._use_local_storage = self.execution_mode == "local"
+        if self._use_local_storage and self.global_params.get("kv_backend") == "rocksdb":
+            logger.info(
+                "Switching kv_backend from rocksdb to json_kv for local execution mode."
+            )
+            self.global_params["kv_backend"] = "json_kv"
+        if self._use_local_storage and self.global_params.get("graph_backend") == "kuzu":
+            logger.info(
+                "Switching graph_backend from kuzu to networkx for local execution mode."
+            )
+            self.global_params["graph_backend"] = "networkx"
         os.environ["GRAPHGEN_EXECUTION_MODE"] = self.execution_mode
 
         ctx = DataContext.get_current()
@@ -80,7 +90,6 @@ class Engine:
                 ignore_reinit_error=True,
                 logging_level=logging.ERROR,
                 log_to_driver=True,
-                local_mode=self._use_local_storage,
                 **ray_init_kwargs,
             )
             logger.info("Ray Dashboard URL: %s", context.dashboard_url)
@@ -133,8 +142,10 @@ class Engine:
             self.storage_actors[f"graph_{ns}"] = proxy
             logger.info("Create Graph Storage Actor: namespace=%s", ns)
 
-    def _build_compute_strategy(self, replicas: int):
+    def _build_compute_strategy(self, replicas: int, op_handler: Callable):
         if self._use_local_storage:
+            if inspect.isclass(op_handler):
+                return None
             return ray.data.TaskPoolStrategy(size=max(1, replicas))
         return ray.data.ActorPoolStrategy(min_size=1, max_size=replicas)
 
@@ -283,7 +294,7 @@ class Engine:
         if node.type == "aggregate":
             self.datasets[node.id] = input_ds.repartition(1).map_batches(
                 op_handler,
-                compute=self._build_compute_strategy(1),
+                compute=self._build_compute_strategy(1, op_handler),
                 batch_size=None,  # aggregate processes the whole dataset at once
                 num_gpus=compute_resources.get("num_gpus", 0)
                 if compute_resources
@@ -294,7 +305,7 @@ class Engine:
         else:
             self.datasets[node.id] = input_ds.map_batches(
                 op_handler,
-                compute=self._build_compute_strategy(replicas),
+                compute=self._build_compute_strategy(replicas, op_handler),
                 batch_size=batch_size,
                 num_gpus=compute_resources.get("num_gpus", 0)
                 if compute_resources
