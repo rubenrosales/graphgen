@@ -118,9 +118,45 @@ class LLMFactory:
     """
 
     @staticmethod
+    def _create_local_llm(backend: str, config: Dict[str, Any]) -> BaseLLMWrapper:
+        tokenizer_model = os.environ.get("TOKENIZER_MODEL", "cl100k_base")
+        tokenizer = Tokenizer(model_name=tokenizer_model)
+        config = {**config, "tokenizer": tokenizer}
+
+        if backend == "http_api":
+            from graphgen.models.llm.api.http_client import HTTPClient
+
+            return HTTPClient(**config)
+        if backend in ("openai_api", "azure_openai_api"):
+            from graphgen.models.llm.api.openai_client import OpenAIClient
+
+            return OpenAIClient(**config, backend=backend)
+        if backend == "ollama_api":
+            from graphgen.models.llm.api.ollama_client import OllamaClient
+
+            return OllamaClient(**config)
+        if backend == "huggingface":
+            from graphgen.models.llm.local.hf_wrapper import HuggingFaceWrapper
+
+            return HuggingFaceWrapper(**config)
+        if backend == "sglang":
+            from graphgen.models.llm.local.sglang_wrapper import SGLangWrapper
+
+            return SGLangWrapper(**config)
+        if backend == "vllm":
+            from graphgen.models.llm.local.vllm_wrapper import VLLMWrapper
+
+            return VLLMWrapper(**config)
+        raise NotImplementedError(f"Backend {backend} is not implemented yet.")
+
+    @staticmethod
     def create_llm(
         model_type: str, backend: str, config: Dict[str, Any]
     ) -> BaseLLMWrapper:
+        use_local = os.getenv("GRAPHGEN_EXECUTION_MODE", "").lower() == "local"
+        if use_local:
+            return LLMFactory._create_local_llm(backend, config)
+
         import ray
 
         if not config:

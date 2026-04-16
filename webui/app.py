@@ -32,6 +32,26 @@ css = """
 """
 
 
+def _env_or_default(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    return value if value not in (None, "") else default
+
+
+def _coalesce_model_config(
+    value: str, primary_env: str, fallback_env: str | None = None, default: str = ""
+) -> str:
+    if value:
+        return value
+    resolved = os.getenv(primary_env)
+    if resolved:
+        return resolved
+    if fallback_env:
+        resolved = os.getenv(fallback_env)
+        if resolved:
+            return resolved
+    return default
+
+
 def _get_partition_params(params: WebuiParams):
     method = params.partition_method
     if method == "dfs":
@@ -64,21 +84,54 @@ def run_graphgen(params: WebuiParams, progress=gr.Progress()):
     driver_logger = set_logger(log_file, "GraphGeb", if_stream=True)
     CURRENT_LOGGER_VAR.set(driver_logger)
 
+    synthesizer_url = _coalesce_model_config(
+        params.synthesizer_url,
+        "SYNTHESIZER_BASE_URL",
+        default="https://api.siliconflow.cn/v1",
+    )
+    synthesizer_model = _coalesce_model_config(
+        params.synthesizer_model,
+        "SYNTHESIZER_MODEL",
+        default="Qwen/Qwen2.5-7B-Instruct",
+    )
+    synthesizer_api_key = _coalesce_model_config(
+        params.api_key,
+        "SYNTHESIZER_API_KEY",
+        "API_KEY",
+    )
+    trainee_url = _coalesce_model_config(
+        params.trainee_url,
+        "TRAINEE_BASE_URL",
+        "SYNTHESIZER_BASE_URL",
+        default="https://api.siliconflow.cn/v1",
+    )
+    trainee_model = _coalesce_model_config(
+        params.trainee_model,
+        "TRAINEE_MODEL",
+        "SYNTHESIZER_MODEL",
+        default="Qwen/Qwen2.5-7B-Instruct",
+    )
+    trainee_api_key = _coalesce_model_config(
+        params.trainee_api_key,
+        "TRAINEE_API_KEY",
+        "SYNTHESIZER_API_KEY",
+    )
+
     # 2. Setup Environment Variables for Ray Actors/LLM Init
     # The refactored code relies on env vars in graphgen/common/init_llm.py
     os.environ["SYNTHESIZER_BACKEND"] = "openai_api"  # Assuming OpenAI compatible API
-    os.environ["SYNTHESIZER_BASE_URL"] = params.synthesizer_url
-    os.environ["SYNTHESIZER_API_KEY"] = params.api_key
-    os.environ["SYNTHESIZER_MODEL"] = params.synthesizer_model
+    os.environ["SYNTHESIZER_BASE_URL"] = synthesizer_url
+    os.environ["SYNTHESIZER_API_KEY"] = synthesizer_api_key
+    os.environ["SYNTHESIZER_MODEL"] = synthesizer_model
     os.environ["RPM"] = str(params.rpm)
     os.environ["TPM"] = str(params.tpm)
     os.environ["TOKENIZER_MODEL"] = params.tokenizer
 
     if params.if_trainee_model:
         os.environ["TRAINEE_BACKEND"] = "openai_api"
-        os.environ["TRAINEE_BASE_URL"] = params.trainee_url
-        os.environ["TRAINEE_API_KEY"] = params.trainee_api_key
-        os.environ["TRAINEE_MODEL"] = params.trainee_model
+        os.environ["TRAINEE_BASE_URL"] = trainee_url
+        os.environ["TRAINEE_API_KEY"] = trainee_api_key
+        os.environ["TRAINEE_MODEL"] = trainee_model
 
     # 3. Construct Pipeline Configuration (DAG)
     nodes = [
@@ -280,30 +333,44 @@ with gr.Blocks(title="GraphGen Demo", theme=gr.themes.Glass(), css=css) as demo:
 
         with gr.Accordion(label=_("Model Config"), open=False):
             tokenizer = gr.Textbox(
-                label="Tokenizer", value="cl100k_base", interactive=True
+                label="Tokenizer",
+                value=_env_or_default("TOKENIZER_MODEL", "cl100k_base"),
+                interactive=True,
             )
             synthesizer_url = gr.Textbox(
                 label="Synthesizer URL",
-                value="https://api.siliconflow.cn/v1",
+                value=_env_or_default(
+                    "SYNTHESIZER_BASE_URL", "https://api.siliconflow.cn/v1"
+                ),
                 info=_("Synthesizer URL Info"),
                 interactive=True,
             )
             synthesizer_model = gr.Textbox(
                 label="Synthesizer Model",
-                value="Qwen/Qwen2.5-7B-Instruct",
+                value=_env_or_default(
+                    "SYNTHESIZER_MODEL", "Qwen/Qwen2.5-7B-Instruct"
+                ),
                 info=_("Synthesizer Model Info"),
                 interactive=True,
             )
             trainee_url = gr.Textbox(
                 label="Trainee URL",
-                value="https://api.siliconflow.cn/v1",
+                value=_env_or_default(
+                    "TRAINEE_BASE_URL",
+                    _env_or_default(
+                        "SYNTHESIZER_BASE_URL", "https://api.siliconflow.cn/v1"
+                    ),
+                ),
                 info=_("Trainee URL Info"),
                 interactive=True,
                 visible=if_trainee_model.value is True,
             )
             trainee_model = gr.Textbox(
                 label="Trainee Model",
-                value="Qwen/Qwen2.5-7B-Instruct",
+                value=_env_or_default(
+                    "TRAINEE_MODEL",
+                    _env_or_default("SYNTHESIZER_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
+                ),
                 info=_("Trainee Model Info"),
                 interactive=True,
                 visible=if_trainee_model.value is True,
@@ -311,7 +378,9 @@ with gr.Blocks(title="GraphGen Demo", theme=gr.themes.Glass(), css=css) as demo:
             trainee_api_key = gr.Textbox(
                 label=_("SiliconFlow Token for Trainee Model"),
                 type="password",
-                value="",
+                value=_env_or_default(
+                    "TRAINEE_API_KEY", _env_or_default("SYNTHESIZER_API_KEY", "")
+                ),
                 info="https://cloud.siliconflow.cn/account/ak",
                 visible=if_trainee_model.value is True,
             )
@@ -321,7 +390,9 @@ with gr.Blocks(title="GraphGen Demo", theme=gr.themes.Glass(), css=css) as demo:
                 api_key = gr.Textbox(
                     label=_("SiliconFlow Token"),
                     type="password",
-                    value="",
+                    value=_env_or_default(
+                        "SYNTHESIZER_API_KEY", _env_or_default("API_KEY", "")
+                    ),
                     info=_("SiliconFlow Token Info"),
                 )
             with gr.Column(scale=1):
