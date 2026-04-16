@@ -1,8 +1,7 @@
 from typing import Tuple
 
-from graphgen.bases import BaseKVStorage, BaseLLMWrapper, BaseOperator
+from graphgen.bases import BaseLLMWrapper, BaseOperator
 from graphgen.common.init_llm import init_llm
-from graphgen.common.init_storage import init_storage
 from graphgen.utils import logger, run_concurrent
 
 
@@ -23,9 +22,6 @@ class GenerateService(BaseOperator):
             working_dir=working_dir, kv_backend=kv_backend, op_name="generate"
         )
         self.llm_client: BaseLLMWrapper = init_llm("synthesizer")
-        self.generate_storage: BaseKVStorage = init_storage(
-            backend=kv_backend, working_dir=working_dir, namespace="generate"
-        )
 
         self.method = method
         self.data_format = data_format
